@@ -1,0 +1,248 @@
+import re
+import tkinter as tk
+
+# ---- Utilities --------------------------------------------------------------
+
+def safe_eval(expr: str) -> str:
+    """
+    Evaluate a basic arithmetic expression safely.
+    Allowed: digits, + - * / ( ) . and spaces.
+    """
+    if not re.fullmatch(r"[0-9+\-*/().\s]+", expr):
+        return "Error"
+    try:
+        # Evaluate and format nicely (trim trailing .0, limit long floats)
+        value = eval(expr, {"__builtins__": {}})
+        if isinstance(value, (int, float)):
+            # Clamp extremely large/small numbers to scientific format
+            if value != 0 and (abs(value) < 1e-8 or abs(value) >= 1e12):
+                return f"{value:.10e}".replace("+", "")
+            # Trim floating noise
+            text = f"{value:.12g}"
+            return text
+        return "Error"
+    except Exception:
+        return "Error"
+
+def replace_last_number(expr: str, transform):
+    """
+    Find the last number in the expression and replace it with transform(number).
+    Numbers can be like: 12, 12.3, (leading - is considered part of number when isolated).
+    """
+    # Find last contiguous number (with optional leading minus if at start or after '(' or operator)
+    # We'll scan from the end.
+    i = len(expr) - 1
+    while i >= 0 and expr[i].isspace():
+        i -= 1
+    if i < 0:
+        return expr
+
+    # Identify end of number
+    end = i
+    # Accept digits and dot
+    while i >= 0 and (expr[i].isdigit() or expr[i] == '.'):
+        i -= 1
+    # Allow a unary minus if it looks like a sign (start or after operator/()
+    if i >= 0 and expr[i] == '-' and (i == 0 or expr[i-1] in "+-*/("):
+        i -= 1
+    start = i + 1
+
+    number_text = expr[start:end+1]
+    if not number_text or number_text in "+-*/().":
+        return expr  # nothing to replace
+
+    try:
+        number_val = float(number_text)
+    except ValueError:
+        return expr
+
+    new_val = transform(number_val)
+    # Format new number (avoid trailing .0)
+    if abs(new_val - int(new_val)) < 1e-12:
+        new_text = str(int(new_val))
+    else:
+        new_text = f"{new_val:.12g}"
+
+    return expr[:start] + new_text + expr[end+1:]
+
+# ---- UI --------------------------------------------------------------------
+
+class Calculator(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Prakash Calculator")
+        self.geometry("320x420")
+        self.resizable(False, False)
+        self.configure(bg="#0b1020")
+
+        self.expr = tk.StringVar(value="0")
+
+        self._build_display()
+        self._build_keys()
+        self._bind_keys()
+
+    def _build_display(self):
+        brand = tk.Label(self, text="PRAKASH  CALCULATOR",
+                         fg="#9ca3af", bg="#0b1020",
+                         font=("Segoe UI", 10, "bold"))
+        brand.pack(pady=(12, 2))
+
+        frame = tk.Frame(self, bg="#0b1020")
+        frame.pack(fill="x", padx=16)
+
+        self.entry = tk.Entry(frame, textvariable=self.expr, justify="right",
+                              bd=0, bg="#0b1224", fg="#e5e7eb",
+                              insertbackground="#e5e7eb",
+                              font=("Segoe UI", 28, "bold"))
+        self.entry.pack(fill="x", ipady=14, padx=2, pady=8)
+
+    def _build_keys(self):
+        btn_cfg = dict(font=("Segoe UI", 14, "bold"), bd=0, relief="flat",
+                       fg="#e5e7eb", activeforeground="#ffffff", cursor="hand2")
+
+        grid = tk.Frame(self, bg="#0b1020")
+        grid.pack(expand=True, fill="both", padx=14, pady=14)
+
+        def make_btn(text, r, c, cmd, w=1, style="normal"):
+            colors = {
+                "normal": ("#1b2437", "#222c45"),
+                "op": ("#23407a", "#285198"),
+                "eq": ("#106b4a", "#13855b"),
+                "muted": ("#101827", "#142038"),
+            }
+            bg, active = colors[style]
+            b = tk.Button(grid, text=text, command=cmd, bg=bg, activebackground=active, **btn_cfg)
+            b.grid(row=r, column=c, columnspan=w, sticky="nsew", padx=6, pady=6, ipadx=2, ipady=10)
+            return b
+
+        labels = [
+            [("AC","muted"), ("⌫","muted"), ("%","op"), ("÷","op")],
+            [("7","normal"), ("8","normal"), ("9","normal"), ("×","op")],
+            [("4","normal"), ("5","normal"), ("6","normal"), ("−","op")],
+            [("1","normal"), ("2","normal"), ("3","normal"), ("+","op")],
+            [("±","muted"), ("0","normal"), (".","normal"), ("=","eq")],
+        ]
+
+        actions = {
+            "AC": self.clear_all,
+            "⌫": self.backspace,
+            "%": self.percent,
+            "÷": lambda: self.add_op("/"),
+            "×": lambda: self.add_op("*"),
+            "−": lambda: self.add_op("-"),
+            "+": lambda: self.add_op("+"),
+            "±": self.toggle_sign,
+            ".": lambda: self.add_dot(),
+            "=": self.equals,
+            "0": lambda: self.add_digit("0"),
+            "1": lambda: self.add_digit("1"),
+            "2": lambda: self.add_digit("2"),
+            "3": lambda: self.add_digit("3"),
+            "4": lambda: self.add_digit("4"),
+            "5": lambda: self.add_digit("5"),
+            "6": lambda: self.add_digit("6"),
+            "7": lambda: self.add_digit("7"),
+            "8": lambda: self.add_digit("8"),
+            "9": lambda: self.add_digit("9"),
+        }
+
+        for r, row in enumerate(labels):
+            for c, (text, style) in enumerate(row):
+                make_btn(text, r, c, actions[text], style=style)
+
+        # Make grid cells expand evenly
+        for i in range(4):
+            grid.columnconfigure(i, weight=1)
+        for i in range(5):
+            grid.rowconfigure(i, weight=1)
+
+    # ---- Key Bindings -------------------------------------------------------
+
+    def _bind_keys(self):
+        self.bind("<Key>", self._on_key)
+        self.bind("<Return>", lambda e: self.equals())
+        self.bind("<KP_Enter>", lambda e: self.equals())
+        self.bind("<Escape>", lambda e: self.clear_all())
+        self.bind("<BackSpace>", lambda e: self.backspace())
+
+    def _on_key(self, event):
+        k = event.keysym
+        ch = event.char
+
+        if ch.isdigit():
+            self.add_digit(ch); return "break"
+        if ch in "+-*/":
+            self.add_op(ch); return "break"
+        if ch == ".":
+            self.add_dot(); return "break"
+        if ch == "%":
+            self.percent(); return "break"
+
+    # ---- Calculator Logic ---------------------------------------------------
+
+    def get_expr(self) -> str:
+        return self.expr.get()
+
+    def set_expr(self, s: str):
+        self.expr.set(s)
+
+    def clear_all(self):
+        self.set_expr("0")
+
+    def backspace(self):
+        s = self.get_expr()
+        s = s[:-1] if len(s) > 1 else "0"
+        self.set_expr(s)
+
+    def add_digit(self, d: str):
+        s = self.get_expr()
+        if s == "0":
+            self.set_expr(d)
+        else:
+            self.set_expr(s + d)
+
+    def add_op(self, op: str):
+        s = self.get_expr().rstrip()
+        if s == "" or s == "Error":
+            return
+        if s[-1] in "+-*/":
+            s = s[:-1] + op
+        else:
+            s += op
+        self.set_expr(s)
+
+    def add_dot(self):
+        s = self.get_expr()
+        # Add dot to the last number only if it doesn't already contain one
+        # Split by operators to find last token
+        tokens = re.split(r"([+\-*/])", s)
+        if tokens:
+            last = tokens[-1]
+            if "." not in last:
+                self.set_expr(s + ".")
+        else:
+            self.set_expr("0.")
+
+    def percent(self):
+        s = self.get_expr()
+        new_s = replace_last_number(s, lambda x: x / 100.0)
+        self.set_expr(new_s)
+
+    def toggle_sign(self):
+        s = self.get_expr()
+        def _neg(x): return -x
+        self.set_expr(replace_last_number(s, _neg))
+
+    def equals(self):
+        s = self.get_expr()
+        # Avoid trailing operator (e.g., "12+")
+        if s and s[-1] in "+-*/":
+            s = s[:-1]
+        res = safe_eval(s)
+        self.set_expr(res)
+
+# ---- Run -------------------------------------------------------------------
+
+if __name__ == "__main__":
+    app = Calculator()
+    app.mainloop()
